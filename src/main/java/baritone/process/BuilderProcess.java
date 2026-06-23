@@ -286,9 +286,14 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         BetterBlockPos center = ctx.playerFeet();
         BetterBlockPos pathStart = baritone.getPathingBehavior().pathStart();
         List<Tuple<BetterBlockPos, Rotation>> candidates = new ArrayList<>();
+        double maxDistance = Math.pow(Baritone.settings().builderBreakDistance.value, 2);
 
         for (int dy = Baritone.settings().breakFromAbove.value ? -1 : 0; dy <= 5; dy++) {
             for (Vec3i offset : XZ_OFFSETS_NEAR_TO_FAR) {
+                double dist = Math.pow(offset.getX(), 2) + Math.pow(offset.getZ(), 2);
+                if (dist > maxDistance) {
+                    continue;
+                }
                 int x = center.x + offset.getX();
                 int y = center.y + dy;
                 int z = center.z + offset.getZ();
@@ -317,9 +322,18 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         Rotation currentRot = ctx.playerRotations();
         // Sort by rotation distance from current look direction (most human-like)
         candidates.sort((a, b) -> {
-            double distA = rotationDistance(currentRot, a.getB());
-            double distB = rotationDistance(currentRot, b.getB());
-            return Double.compare(distA, distB);
+            double rotDistA = rotationDistance(currentRot, a.getB());
+            double rotDistB = rotationDistance(currentRot, b.getB());
+
+            double physDistA = a.getA().distSqr(center);
+            double physDistB = b.getA().distSqr(center);
+
+            // 80% rotation priority, 20% distance priority
+            double scoreA = rotDistA * 0.8 + Math.sqrt(physDistA) * 0.2;
+            double scoreB = rotDistB * 0.8 + Math.sqrt(physDistB) * 0.2;
+
+            return Double.compare(scoreA, scoreB);
+
         });
 
         return Optional.of(candidates.getFirst());

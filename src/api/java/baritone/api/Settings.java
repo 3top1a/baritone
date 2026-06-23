@@ -244,6 +244,11 @@ public final class Settings {
     )));
 
     /**
+     * How far to break blocks.
+     */
+    public final Setting<Double> builderBreakDistance = new Setting<>(2.0);
+
+    /**
      * Blocks that Baritone is not allowed to break
      */
     public final Setting<List<Block>> blocksToDisallowBreaking = new Setting<>(new ArrayList<>(
