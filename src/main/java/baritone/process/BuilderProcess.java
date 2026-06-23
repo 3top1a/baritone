@@ -46,6 +46,7 @@ import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.Vec3i;
+import net.minecraft.util.Mth;
 import net.minecraft.util.Tuple;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.BlockItem;
@@ -60,6 +61,7 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.VoxelShape;
+import org.apache.commons.lang3.stream.Streams;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -91,6 +93,20 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
     private int numRepeats;
     private List<BlockState> approxPlaceable;
     public int stopAtHeight = 0;
+
+    private static Vec3i[] xzOffsets(boolean reversed) {
+        final ArrayList<Vec3i> list = new ArrayList<>();
+        for (int dx = -5; dx <= 5; dx++)
+            for (int dz = -5; dz <= 5; dz++)
+                list.add(new Vec3i(dx, 0, dz));
+        Comparator<Vec3i> comparator = Comparator.comparingDouble(v -> Math.round(Vec3i.ZERO.distSqr(v)));
+        if (reversed) comparator = comparator.reversed();
+        list.sort(comparator.thenComparingDouble(v -> Mth.atan2(-v.getX(), v.getZ())));
+        return list.stream().collect(new Streams.ArrayCollector<>(Vec3i.class));
+    }
+
+    private static final Vec3i[] XZ_OFFSETS_NEAR_TO_FAR = xzOffsets(false);
+    private static final Vec3i[] XZ_OFFSETS_FAR_TO_NEAR = xzOffsets(true);
 
     public BuilderProcess(Baritone baritone) {
         super(baritone);
@@ -269,12 +285,11 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
     private Optional<Tuple<BetterBlockPos, Rotation>> toBreakNearPlayer(BuilderCalculationContext bcc) {
         BetterBlockPos center = ctx.playerFeet();
         BetterBlockPos pathStart = baritone.getPathingBehavior().pathStart();
-        for (int dx = -5; dx <= 5; dx++) {
             for (int dy = Baritone.settings().breakFromAbove.value ? -1 : 0; dy <= 5; dy++) {
-                for (int dz = -5; dz <= 5; dz++) {
-                    int x = center.x + dx;
+                for (Vec3i offset : XZ_OFFSETS_NEAR_TO_FAR) {
+                    int x = center.x + offset.getX();
                     int y = center.y + dy;
-                    int z = center.z + dz;
+                    int z = center.z + offset.getZ();
                     if (dy == -1 && x == pathStart.x && z == pathStart.z) {
                         continue; // dont mine what we're supported by, but not directly standing on
                     }
@@ -291,9 +306,26 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                         }
                     }
                 }
-            }
         }
         return Optional.empty();
+    }
+
+    /**
+     * Calculate angular distance between two rotations
+     * Lower values = less head movement required
+     */
+    private double rotationDistance(Rotation from, Rotation to) {
+        double yawDiff = Math.abs(from.getYaw() - to.getYaw());
+        double pitchDiff = Math.abs(from.getPitch() - to.getPitch());
+
+        // Normalize yaw difference (wrap around at 360)
+        if (yawDiff > 180) {
+            yawDiff = 360 - yawDiff;
+        }
+
+        // Weight pitch changes slightly less than yaw (personal preference, adjust as needed)
+        // Using Euclidean distance for combined rotation difference
+        return Math.sqrt(yawDiff * yawDiff + pitchDiff * pitchDiff * 0.8);
     }
 
     public static class Placement {
@@ -313,26 +345,24 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
 
     private Optional<Placement> searchForPlacables(BuilderCalculationContext bcc, List<BlockState> desirableOnHotbar) {
         BetterBlockPos center = ctx.playerFeet();
-        for (int dx = -5; dx <= 5; dx++) {
-            for (int dy = -5; dy <= 1; dy++) {
-                for (int dz = -5; dz <= 5; dz++) {
-                    int x = center.x + dx;
-                    int y = center.y + dy;
-                    int z = center.z + dz;
-                    BlockState desired = bcc.getSchematic(x, y, z, bcc.bsi.get0(x, y, z));
-                    if (desired == null) {
-                        continue; // irrelevant
+        for (int dy = -5; dy <= 1; dy++) {
+            for (Vec3i offset : XZ_OFFSETS_NEAR_TO_FAR) {
+                int x = center.x + offset.getX();
+                int y = center.y + dy;
+                int z = center.z + offset.getZ();
+                BlockState desired = bcc.getSchematic(x, y, z, bcc.bsi.get0(x, y, z));
+                if (desired == null) {
+                    continue; // irrelevant
+                }
+                BlockState curr = bcc.bsi.get0(x, y, z);
+                if (MovementHelper.isReplaceable(x, y, z, curr, bcc.bsi) && !valid(curr, desired, false)) {
+                    if (dy == 1 && bcc.bsi.get0(x, y + 1, z).getBlock() instanceof AirBlock) {
+                        continue;
                     }
-                    BlockState curr = bcc.bsi.get0(x, y, z);
-                    if (MovementHelper.isReplaceable(x, y, z, curr, bcc.bsi) && !valid(curr, desired, false)) {
-                        if (dy == 1 && bcc.bsi.get0(x, y + 1, z).getBlock() instanceof AirBlock) {
-                            continue;
-                        }
-                        desirableOnHotbar.add(desired);
-                        Optional<Placement> opt = possibleToPlace(desired, x, y, z, bcc.bsi);
-                        if (opt.isPresent()) {
-                            return opt;
-                        }
+                    desirableOnHotbar.add(desired);
+                    Optional<Placement> opt = possibleToPlace(desired, x, y, z, bcc.bsi);
+                    if (opt.isPresent()) {
+                        return opt;
                     }
                 }
             }
