@@ -285,29 +285,44 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
     private Optional<Tuple<BetterBlockPos, Rotation>> toBreakNearPlayer(BuilderCalculationContext bcc) {
         BetterBlockPos center = ctx.playerFeet();
         BetterBlockPos pathStart = baritone.getPathingBehavior().pathStart();
-            for (int dy = Baritone.settings().breakFromAbove.value ? -1 : 0; dy <= 5; dy++) {
-                for (Vec3i offset : XZ_OFFSETS_NEAR_TO_FAR) {
-                    int x = center.x + offset.getX();
-                    int y = center.y + dy;
-                    int z = center.z + offset.getZ();
-                    if (dy == -1 && x == pathStart.x && z == pathStart.z) {
-                        continue; // dont mine what we're supported by, but not directly standing on
-                    }
-                    BlockState desired = bcc.getSchematic(x, y, z, bcc.bsi.get0(x, y, z));
-                    if (desired == null) {
-                        continue; // irrelevant
-                    }
-                    BlockState curr = bcc.bsi.get0(x, y, z);
-                    if (!(curr.getBlock() instanceof AirBlock) && !(curr.getBlock() == Blocks.WATER || curr.getBlock() == Blocks.LAVA) && !valid(curr, desired, false)) {
-                        BetterBlockPos pos = new BetterBlockPos(x, y, z);
-                        Optional<Rotation> rot = RotationUtils.reachable(ctx, pos, ctx.playerController().getBlockReachDistance());
-                        if (rot.isPresent()) {
-                            return Optional.of(new Tuple<>(pos, rot.get()));
-                        }
+        List<Tuple<BetterBlockPos, Rotation>> candidates = new ArrayList<>();
+
+        for (int dy = Baritone.settings().breakFromAbove.value ? -1 : 0; dy <= 5; dy++) {
+            for (Vec3i offset : XZ_OFFSETS_NEAR_TO_FAR) {
+                int x = center.x + offset.getX();
+                int y = center.y + dy;
+                int z = center.z + offset.getZ();
+                if (dy == -1 && x == pathStart.x && z == pathStart.z) {
+                    continue; // dont mine what we're supported by, but not directly standing on
+                }
+                BlockState desired = bcc.getSchematic(x, y, z, bcc.bsi.get0(x, y, z));
+                if (desired == null) {
+                    continue; // irrelevant
+                }
+                BlockState curr = bcc.bsi.get0(x, y, z);
+                if (!(curr.getBlock() instanceof AirBlock) && !(curr.getBlock() == Blocks.WATER || curr.getBlock() == Blocks.LAVA) && !valid(curr, desired, false)) {
+                    BetterBlockPos pos = new BetterBlockPos(x, y, z);
+                    Optional<Rotation> rot = RotationUtils.reachable(ctx, pos, ctx.playerController().getBlockReachDistance());
+                    if (rot.isPresent()) {
+                        candidates.add(new Tuple<>(pos, rot.get()));
                     }
                 }
+            }
         }
-        return Optional.empty();
+
+        if (candidates.isEmpty()) {
+            return Optional.empty();
+        }
+
+        Rotation currentRot = ctx.playerRotations();
+        // Sort by rotation distance from current look direction (most human-like)
+        candidates.sort((a, b) -> {
+            double distA = rotationDistance(currentRot, a.getB());
+            double distB = rotationDistance(currentRot, b.getB());
+            return Double.compare(distA, distB);
+        });
+
+        return Optional.of(candidates.getFirst());
     }
 
     /**
@@ -428,7 +443,8 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                     InteractionHand.MAIN_HAND,
                     stack,
                     (BlockHitResult) result
-            ) {}); // that {} gives us access to a protected constructor lmfao
+            ) {
+            }); // that {} gives us access to a protected constructor lmfao
             BlockState wouldBePlaced = ((BlockItem) stack.getItem()).getBlock().getStateForPlacement(meme);
             ctx.player().setYRot(originalYaw);
             ctx.player().setXRot(originalPitch);
@@ -1042,12 +1058,13 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
             }
             // <toxic cloud>
             BlockState itemState = ((BlockItem) stack.getItem())
-                .getBlock()
-                .getStateForPlacement(
-                    new BlockPlaceContext(
-                        new UseOnContext(ctx.world(), ctx.player(), InteractionHand.MAIN_HAND, stack, new BlockHitResult(new Vec3(ctx.player().position().x, ctx.player().position().y, ctx.player().position().z), Direction.UP, ctx.playerFeet(), false)) {}
-                    )
-                );
+                    .getBlock()
+                    .getStateForPlacement(
+                            new BlockPlaceContext(
+                                    new UseOnContext(ctx.world(), ctx.player(), InteractionHand.MAIN_HAND, stack, new BlockHitResult(new Vec3(ctx.player().position().x, ctx.player().position().y, ctx.player().position().z), Direction.UP, ctx.playerFeet(), false)) {
+                                    }
+                            )
+                    );
             if (itemState != null) {
                 result.add(itemState);
             } else {
