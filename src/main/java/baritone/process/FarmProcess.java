@@ -232,6 +232,7 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
         List<BlockPos> bonemealable = new ArrayList<>();
         List<BlockPos> openSoulsand = new ArrayList<>();
         List<BlockPos> openLog = new ArrayList<>();
+        boolean farmIndefinitely = Baritone.settings().farmIndefinitely.value;
         for (BlockPos pos : locations) {
             //check if the target block is out of range.
             if (range != 0 && pos.distSqr(center) > range * range) {
@@ -361,7 +362,7 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
         }
 
         if (calcFailed) {
-            if (this.selOnly) {
+            if (farmIndefinitely) {
                 return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
             }
 
@@ -411,7 +412,7 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
             }
         }
         if (goalz.isEmpty()) {
-            if (this.selOnly) {
+            if (farmIndefinitely) {
                 return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
             }
 
