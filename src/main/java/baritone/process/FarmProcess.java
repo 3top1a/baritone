@@ -26,12 +26,14 @@ import baritone.api.pathing.goals.GoalComposite;
 import baritone.api.process.IFarmProcess;
 import baritone.api.process.PathingCommand;
 import baritone.api.process.PathingCommandType;
+import baritone.api.selection.ISelection;
 import baritone.api.utils.BetterBlockPos;
 import baritone.api.utils.RayTraceUtils;
 import baritone.api.utils.Rotation;
 import baritone.api.utils.RotationUtils;
 import baritone.api.utils.input.Input;
 import baritone.pathing.movement.MovementHelper;
+import baritone.selection.SelectionManager;
 import baritone.utils.BaritoneProcessHelper;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -71,6 +73,7 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
 
     private int range;
     private BlockPos center;
+    private Boolean selOnly;
 
     private static final List<Item> FARMLAND_PLANTABLE = Arrays.asList(
             Items.BEETROOT_SEEDS,
@@ -110,7 +113,7 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
     }
 
     @Override
-    public void farm(int range, BlockPos pos) {
+    public void farm(int range, BlockPos pos, Boolean selonly) {
         if (pos == null) {
             center = baritone.getPlayerContext().playerFeet();
         } else {
@@ -119,6 +122,10 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
         this.range = range;
         active = true;
         locations = null;
+        this.selOnly = selonly;
+        if (selonly) {
+            logDebug("farming only in selection");
+        }
     }
 
     private enum Harvest {
@@ -215,7 +222,7 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
                 }
             }
 
-            Baritone.getExecutor().execute(() -> locations = BaritoneAPI.getProvider().getWorldScanner().scanChunkRadius(ctx, scan, Baritone.settings().farmMaxScanSize.value, 10, 10));
+            Baritone.getExecutor().execute(() -> locations = BaritoneAPI.getProvider().getWorldScanner().scanChunkRadius(ctx, scan, Baritone.settings().farmMaxScanSize.value, 10, 50));
         }
         if (locations == null) {
             return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
@@ -229,6 +236,21 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
             //check if the target block is out of range.
             if (range != 0 && pos.distSqr(center) > range * range) {
                 continue;
+            }
+
+            // TODO Would be better if the `locations` was the selected only
+            if (this.selOnly) {
+                SelectionManager selectionManager = baritone.getSelectionManager();
+                boolean inside = false;
+                for (ISelection sel : selectionManager.getSelections()) {
+                    if (sel.aabb().contains(Vec3.atCenterOf(pos))) {
+                        inside = true;
+                        break;
+                    }
+                }
+                if (!inside) {
+                    continue;
+                }
             }
 
             BlockState state = ctx.world().getBlockState(pos);
@@ -339,6 +361,10 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
         }
 
         if (calcFailed) {
+            if (this.selOnly) {
+                return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
+            }
+
             logDirect("Farm failed");
             if (Baritone.settings().notificationOnFarmFail.value) {
                 logNotification("Farm failed", true);
@@ -385,6 +411,10 @@ public final class FarmProcess extends BaritoneProcessHelper implements IFarmPro
             }
         }
         if (goalz.isEmpty()) {
+            if (this.selOnly) {
+                return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
+            }
+
             logDirect("Farm failed");
             if (Baritone.settings().notificationOnFarmFail.value) {
                 logNotification("Farm failed", true);

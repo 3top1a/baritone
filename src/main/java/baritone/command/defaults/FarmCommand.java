@@ -41,6 +41,11 @@ public class FarmCommand extends Command {
         args.requireMax(2);
         int range = 0;
         BetterBlockPos origin = null;
+        Boolean selonly = false;
+        //sel
+        if (args.has(1)) {
+            selonly = args.getAsOrDefault(Boolean.class, false);
+        }
         //range
         if (args.has(1)) {
             range = args.getAs(Integer.class);
@@ -61,7 +66,7 @@ public class FarmCommand extends Command {
             origin = waypoint.getLocation();
         }
 
-        baritone.getFarmProcess().farm(range, origin);
+        baritone.getFarmProcess().farm(range, origin, selonly);
         logDirect("Farming");
     }
 
@@ -82,6 +87,7 @@ public class FarmCommand extends Command {
                 "",
                 "Usage:",
                 "> farm - farms every crop it can find.",
+                "> farm <sel only> - farm only inside selection",
                 "> farm <range> - farm crops within range from the starting position.",
                 "> farm <range> <waypoint> - farm crops within range from waypoint."
         );
