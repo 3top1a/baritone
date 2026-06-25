@@ -62,6 +62,7 @@ import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import org.apache.commons.lang3.stream.Streams;
+import org.jspecify.annotations.NonNull;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -283,20 +284,66 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
     }
 
     private Optional<Tuple<BetterBlockPos, Rotation>> toBreakNearPlayer(BuilderCalculationContext bcc) {
+        Result result = getResult(bcc);
+
+        if (result.candidates().isEmpty()) {
+            bcc.failed++;
+
+            if (bcc.failed > 100)
+            {
+                bcc.failed = 0;
+                result = getResultUnlimited(bcc);
+
+                logDebug("Unable to get human looking targets, resorting to stock - " + result.blocks_total + " blocks");
+
+                if (result.candidates().isEmpty()) {
+                    return Optional.empty();
+                }
+            } else {
+                return Optional.empty();
+            }
+        }
+
+        Rotation currentRot = ctx.playerRotations();
+        Result finalResult = result;
+        result.candidates().sort((a, b) -> {
+            double rotDistA = rotationDistance(currentRot, a.getB());
+            double rotDistB = rotationDistance(currentRot, b.getB());
+
+            double physDistA = a.getA().distSqr(finalResult.center());
+            double physDistB = b.getA().distSqr(finalResult.center());
+
+            double scoreA = rotDistA * (1.- finalResult.breakSortPositionContr()) + Math.sqrt(physDistA) * finalResult.breakSortPositionContr();
+            double scoreB = rotDistB * (1.- finalResult.breakSortPositionContr()) + Math.sqrt(physDistB) * finalResult.breakSortPositionContr();
+
+            return Double.compare(scoreA, scoreB);
+        });
+
+        return Optional.of(result.candidates().getFirst());
+    }
+
+    private @NonNull Result getResult(BuilderCalculationContext bcc) {
         BetterBlockPos center = ctx.playerFeet();
         BetterBlockPos pathStart = baritone.getPathingBehavior().pathStart();
         List<Tuple<BetterBlockPos, Rotation>> candidates = new ArrayList<>();
-        double maxDistance = Math.pow(Baritone.settings().builderBreakDistance.value, 2);
+        double blockReach = Math.pow(Baritone.settings().breakBlockSortMaxDist.value, 2);
+        double breakSortPositionContr = Baritone.settings().breakSortPositionContr.value;
+        int maxHeight = Baritone.settings().breakMaxHeight.value;
+        int minHeight = Baritone.settings().breakMinHeight.value;
 
-        for (int dy = Baritone.settings().breakFromAbove.value ? -1 : 0; dy <= 5; dy++) {
+        int blocks_total = 0;
+        for (int dy = Baritone.settings().breakFromAbove.value ? minHeight : 0; dy <= maxHeight; dy++) {
             for (Vec3i offset : XZ_OFFSETS_NEAR_TO_FAR) {
                 double dist = Math.pow(offset.getX(), 2) + Math.pow(offset.getZ(), 2);
-                if (dist > maxDistance) {
+                if (dist > blockReach) {
                     continue;
                 }
+
                 int x = center.x + offset.getX();
                 int y = center.y + dy;
                 int z = center.z + offset.getZ();
+                BetterBlockPos pos = new BetterBlockPos(x, y, z);
+
                 if (dy == -1 && x == pathStart.x && z == pathStart.z) {
                     continue; // dont mine what we're supported by, but not directly standing on
                 }
@@ -304,9 +351,9 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                 if (desired == null) {
                     continue; // irrelevant
                 }
+                blocks_total++;
                 BlockState curr = bcc.bsi.get0(x, y, z);
                 if (!(curr.getBlock() instanceof AirBlock) && !(curr.getBlock() == Blocks.WATER || curr.getBlock() == Blocks.LAVA) && !valid(curr, desired, false)) {
-                    BetterBlockPos pos = new BetterBlockPos(x, y, z);
                     Optional<Rotation> rot = RotationUtils.reachable(ctx, pos, ctx.playerController().getBlockReachDistance());
                     if (rot.isPresent()) {
                         candidates.add(new Tuple<>(pos, rot.get()));
@@ -314,29 +361,46 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                 }
             }
         }
+        return new Result(center, candidates, breakSortPositionContr, blocks_total);
+    }
 
-        if (candidates.isEmpty()) {
-            return Optional.empty();
+    private @NonNull Result getResultUnlimited(BuilderCalculationContext bcc) {
+        BetterBlockPos center = ctx.playerFeet();
+        BetterBlockPos pathStart = baritone.getPathingBehavior().pathStart();
+        List<Tuple<BetterBlockPos, Rotation>> candidates = new ArrayList<>();
+        double blockReach = Math.pow(Baritone.settings().breakBlockSortMaxDist.value, 2);
+        double breakSortPositionContr = Baritone.settings().breakSortPositionContr.value;
+
+        int blocks_total = 0;
+        for (int dx = -5; dx <= 5; dx++) {
+            for (int dy = -5; dy <= 1; dy++) {
+                for (int dz = -5; dz <= 5; dz++) {
+                    int x = center.x + dx;
+                    int y = center.y + dy;
+                    int z = center.z + dz;
+                    BetterBlockPos pos = new BetterBlockPos(x, y, z);
+
+                    if (dy == -1 && x == pathStart.x && z == pathStart.z) {
+                        continue; // dont mine what we're supported by, but not directly standing on
+                    }
+                    BlockState desired = bcc.getSchematic(x, y, z, bcc.bsi.get0(x, y, z));
+                    if (desired == null) {
+                        continue; // irrelevant
+                    }
+                    blocks_total++;
+                    BlockState curr = bcc.bsi.get0(x, y, z);
+                    if (!(curr.getBlock() instanceof AirBlock) && !(curr.getBlock() == Blocks.WATER || curr.getBlock() == Blocks.LAVA) && !valid(curr, desired, false)) {
+                        Optional<Rotation> rot = RotationUtils.reachable(ctx, pos, ctx.playerController().getBlockReachDistance());
+                        if (rot.isPresent()) {
+                            candidates.add(new Tuple<>(pos, rot.get()));
+                        }
+                    }
+                }
+            }
         }
-
-        Rotation currentRot = ctx.playerRotations();
-        // Sort by rotation distance from current look direction (most human-like)
-        candidates.sort((a, b) -> {
-            double rotDistA = rotationDistance(currentRot, a.getB());
-            double rotDistB = rotationDistance(currentRot, b.getB());
-
-            double physDistA = a.getA().distSqr(center);
-            double physDistB = b.getA().distSqr(center);
-
-            // 80% rotation priority, 20% distance priority
-            double scoreA = rotDistA * 0.8 + Math.sqrt(physDistA) * 0.2;
-            double scoreB = rotDistB * 0.8 + Math.sqrt(physDistB) * 0.2;
-
-            return Double.compare(scoreA, scoreB);
-
-        });
-
-        return Optional.of(candidates.getFirst());
+        return new Result(center, candidates, breakSortPositionContr, blocks_total);
+    }
+    private record Result(BetterBlockPos center, List<Tuple<BetterBlockPos, Rotation>> candidates, double breakSortPositionContr, int blocks_total) {
     }
 
     /**
@@ -356,6 +420,42 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         // Using Euclidean distance for combined rotation difference
         return Math.sqrt(yawDiff * yawDiff + pitchDiff * pitchDiff * 0.8);
     }
+
+    /**
+     * Verify that the bot can actually break this block from the current position
+     * This is stricter than RotationUtils.reachable() to avoid getting stuck
+     */
+    private boolean canActuallyBreak(BetterBlockPos pos, Rotation rot) {
+        // Check if we're actually looking at the right block when using this rotation
+        Rotation actualRot = baritone.getLookBehavior().getAimProcessor().peekRotationForReachability(rot);
+
+        // Perform a raycast to verify we'd actually hit this block
+        HitResult result = RayTraceUtils.rayTraceTowards(ctx.player(), actualRot, ctx.playerController().getBlockReachDistance(), true);
+
+        if (result == null || result.getType() != HitResult.Type.BLOCK) {
+            return false;
+        }
+
+        BlockHitResult blockResult = (BlockHitResult) result;
+
+        // Verify we're actually hitting the target block
+        if (!blockResult.getBlockPos().equals(pos)) {
+            return false;
+        }
+
+        // Additional check: ensure we're not too far away
+        // Even if technically reachable, being too far can cause issues
+        double distSq = ctx.player().position().distanceToSqr(
+                pos.getX() + 0.5,
+                pos.getY() + 0.5,
+                pos.getZ() + 0.5
+        );
+
+        double maxDistSq = Math.pow(ctx.playerController().getBlockReachDistance() - 0.5, 2);
+
+        return distSq <= maxDistSq;
+    }
+
 
     public static class Placement {
 
@@ -559,9 +659,11 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                     return realSchematic.lengthZ();
                 }
             };
+
         }
         BuilderCalculationContext bcc = new BuilderCalculationContext();
         if (!recalc(bcc)) {
+            logDebug("Recalc returned false - build complete or need to repeat");
             if (Baritone.settings().buildInLayers.value && layer * Baritone.settings().layerHeight.value < stopAtHeight) {
                 logDirect("Starting layer " + layer);
                 layer++;
@@ -593,23 +695,20 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
 
         Optional<Tuple<BetterBlockPos, Rotation>> toBreak = toBreakNearPlayer(bcc);
         if (toBreak.isPresent() && isSafeToCancel && ctx.player().onGround()) {
-            // we'd like to pause to break this block
-            // only change look direction if it's safe (don't want to fuck up an in progress parkour for example
             Rotation rot = toBreak.get().getB();
             BetterBlockPos pos = toBreak.get().getA();
             baritone.getLookBehavior().updateTarget(rot, true);
             MovementHelper.switchToBestToolFor(ctx, bcc.get(pos));
             if (ctx.player().isCrouching()) {
-                // really horrible bug where a block is visible for breaking while sneaking but not otherwise
-                // so you can't see it, it goes to place something else, sneaks, then the next tick it tries to break
-                // and is unable since it's unsneaked in the intermediary tick
                 baritone.getInputOverrideHandler().setInputForceState(Input.SNEAK, true);
             }
             if (ctx.isLookingAt(pos) || ctx.playerRotations().isReallyCloseTo(rot)) {
                 baritone.getInputOverrideHandler().setInputForceState(Input.CLICK_LEFT, true);
             }
             return new PathingCommand(null, PathingCommandType.CANCEL_AND_SET_GOAL);
+        } else {
         }
+
         List<BlockState> desirableOnHotbar = new ArrayList<>();
         Optional<Placement> toPlace = searchForPlacables(bcc, desirableOnHotbar);
         if (toPlace.isPresent() && isSafeToCancel && ctx.player().onGround() && ticks <= 0) {
@@ -621,8 +720,10 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                 baritone.getInputOverrideHandler().setInputForceState(Input.CLICK_RIGHT, true);
             }
             return new PathingCommand(null, PathingCommandType.CANCEL_AND_SET_GOAL);
+        } else {
         }
 
+        // Inventory management...
         if (Baritone.settings().allowInventory.value) {
             ArrayList<Integer> usefulSlots = new ArrayList<>();
             List<BlockState> noValidHotbarOption = new ArrayList<>();
@@ -653,8 +754,10 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
 
         Goal goal = assemble(bcc, approxPlaceable.subList(0, 9));
         if (goal == null) {
-            goal = assemble(bcc, approxPlaceable, true); // we're far away, so assume that we have our whole inventory to recalculate placeable properly
+            logDebug("No goal from hotbar, trying full inventory...");
+            goal = assemble(bcc, approxPlaceable, true);
             if (goal == null) {
+                logDebug("Still no goal! Incorrect positions: " + (incorrectPositions != null ? incorrectPositions.size() : "null"));
                 if (Baritone.settings().skipFailedLayers.value && Baritone.settings().buildInLayers.value && layer * Baritone.settings().layerHeight.value < realSchematic.heightY()) {
                     logDirect("Skipping layer that I cannot construct! Layer #" + layer);
                     layer++;
@@ -665,8 +768,10 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                 return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
             }
         }
+
         return new PathingCommandContext(goal, PathingCommandType.FORCE_REVALIDATE_GOAL_AND_PATH, bcc);
     }
+
 
     private boolean recalc(BuilderCalculationContext bcc) {
         if (incorrectPositions == null) {
@@ -1154,6 +1259,7 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         private final int originX;
         private final int originY;
         private final int originZ;
+        private int failed;
 
         public BuilderCalculationContext() {
             super(BuilderProcess.this.baritone, true); // wew lad

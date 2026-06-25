@@ -243,10 +243,12 @@ public final class Settings {
             Blocks.TRIPWIRE
     )));
 
-    /**
-     * How far to break blocks.
-     */
-    public final Setting<Double> builderBreakDistance = new Setting<>(2.0);
+    public final Setting<Double> breakSortPositionContr = new Setting<>(0.2);
+
+    public final Setting<Integer> breakMaxHeight = new Setting<>(4);
+    public final Setting<Integer> breakMinHeight = new Setting<>(-2);
+
+    public final Setting<Double> breakBlockSortMaxDist = new Setting<>(1.5);
 
     /**
      * Blocks that Baritone is not allowed to break
